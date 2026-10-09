@@ -1437,7 +1437,7 @@ macro def_flat_map_item_fns(
 ) {
     $(
         fn $ident(&mut $self, mut $item: Box<ast::Item<ast::$item_kind>> $(, $($args)*)?) -> SmallVec<[Box<ast::Item<ast::$item_kind>>; 1]> {
-            // Skip generated items corresponding to compiler (and mutest-rs) internals.
+            // Skip generated items corresponding to compiler (and calling driver) internals.
             if $item.id == ast::DUMMY_NODE_ID || $item.span == DUMMY_SP { return smallvec![$item]; }
 
             // NOTE: This needs to happen before any visit of the visibility of the item, which may be triggered in $check.

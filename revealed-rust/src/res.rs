@@ -13,9 +13,9 @@ use rustc_session::config::ExternLocation;
 use rustc_span::{ExpnKind, DUMMY_SP, Ident, Span, Symbol, sym, kw};
 use rustc_span::hygiene::AstPass;
 
-use crate::analysis::hir::{self, CRATE_DEF_ID, CRATE_MOD_ID, LOCAL_CRATE, DefKind, Res};
-use crate::analysis::ty::{self, Ty};
-use crate::codegen::ast;
+use crate::ast;
+use crate::hir::{self, CRATE_DEF_ID, CRATE_MOD_ID, LOCAL_CRATE, DefKind, Res};
+use crate::ty::{self, Ty};
 
 pub struct CrateResolutions<'tcx> {
     tcx: TyCtxt<'tcx>,

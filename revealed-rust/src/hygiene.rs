@@ -19,12 +19,12 @@ use rustc_span::edition::Edition;
 use rustc_span::hygiene::{ExpnData, ExpnId, MacroKind, Transparency};
 use rustc_trait_selection::traits::{ImplSource, Obligation, ObligationCause, SelectionContext};
 
-use crate::analysis::ast_lowering;
-use crate::analysis::hir::{self, LOCAL_CRATE};
-use crate::analysis::res;
-use crate::analysis::ty::{self, Ty};
-use crate::codegen::ast;
-use crate::codegen::ast::mut_visit::MutVisitor;
+use crate::ast;
+use crate::ast::mut_visit::MutVisitor;
+use crate::ast_lowering;
+use crate::hir::{self, LOCAL_CRATE};
+use crate::res;
+use crate::ty::{self, Ty};
 
 pub trait HirNodeExt<'hir> {
     fn qpath(&self) -> Option<&'hir hir::QPath<'hir>>;

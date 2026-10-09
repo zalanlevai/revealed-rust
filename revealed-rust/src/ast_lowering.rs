@@ -11,9 +11,9 @@ use rustc_middle::span_bug;
 use rustc_middle::ty::{TyCtxt, ResolverAstLowering};
 use rustc_span::{DUMMY_SP, Span};
 
-use crate::analysis::hir;
-use crate::analysis::res;
-use crate::codegen::ast;
+use crate::ast;
+use crate::hir;
+use crate::res;
 
 pub struct DefResolutions {
     pub node_id_to_def_id: ast::node_id::NodeMap<hir::LocalDefId>,
@@ -68,9 +68,9 @@ pub mod visit {
     use rustc_span::Span;
     use rustc_span::symbol::kw;
 
-    use crate::analysis::Descr;
-    use crate::analysis::hir;
-    use crate::codegen::ast;
+    use crate::Descr;
+    use crate::ast;
+    use crate::hir;
 
     pub trait AstHirVisitor<'ast, 'hir>: Sized {
         type NestedFilter: NestedFilter<'hir> = nested_filter::None;

@@ -3,7 +3,7 @@ pub use rustc_middle::ty::*;
 use rustc_middle::ty;
 use rustc_span::Span;
 
-use crate::analysis::hir;
+use crate::hir;
 
 trait SpanFromGenericsExt {
     fn span_from_generics<'tcx>(self, tcx: TyCtxt<'tcx>, item_with_generics: hir::DefId) -> Span;
@@ -26,11 +26,11 @@ pub mod print {
     use rustc_middle::ty::{self, Ty, TyCtxt};
     use rustc_span::{DUMMY_SP, Ident, Span, Symbol, sym, kw};
 
-    use crate::analysis::ast_lowering;
-    use crate::analysis::hir;
-    use crate::analysis::res;
-    use crate::codegen::ast;
-    use crate::codegen::hygiene;
+    use crate::ast;
+    use crate::ast_lowering;
+    use crate::hir;
+    use crate::hygiene;
+    use crate::res;
 
     use super::SpanFromGenericsExt;
 

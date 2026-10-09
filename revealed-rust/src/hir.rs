@@ -9,7 +9,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
 use rustc_span::symbol::Ident;
 
-use crate::analysis::Descr;
+use crate::Descr;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FnItem<'hir> {

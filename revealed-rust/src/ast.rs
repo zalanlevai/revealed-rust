@@ -5,7 +5,7 @@ pub use rustc_ast::tokenstream::*;
 use rustc_span::Span;
 use rustc_span::symbol::{Ident, Symbol};
 
-use crate::analysis::Descr;
+use crate::Descr;
 
 #[derive(Clone, Debug)]
 pub struct FnItem<'ast> {

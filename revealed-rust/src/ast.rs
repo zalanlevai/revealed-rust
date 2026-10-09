@@ -306,3 +306,32 @@ impl Descr for ast::TyKind {
         }
     }
 }
+
+pub mod inspect {
+    use rustc_ast as ast;
+    use rustc_span::Symbol;
+
+    pub fn match_attr_name(attr: &ast::Attribute, tool: Option<Symbol>, name: Symbol) -> bool {
+        let ast::AttrKind::Normal(normal_attr) = &attr.kind else { return false; };
+        match (tool, &normal_attr.item.path.segments[..]) {
+            (None, [path_name]) => path_name.ident.name == name,
+            (Some(tool), [path_tool, path_name]) => path_tool.ident.name == tool && path_name.ident.name == name,
+            _ => false,
+        }
+    }
+
+    pub fn is_word_attr(attr: &ast::Attribute, tool: Option<Symbol>, word: Symbol) -> bool {
+        let ast::AttrKind::Normal(normal_attr) = &attr.kind else { return false; };
+        let Some(ast::MetaItemKind::Word) = normal_attr.item.meta_kind() else { return false; };
+        match_attr_name(attr, tool, word)
+    }
+
+    pub fn is_list_attr_with_ident(attr: &ast::Attribute, tool: Option<Symbol>, name: Symbol, ident: Symbol) -> bool {
+        let ast::AttrKind::Normal(normal_attr) = &attr.kind else { return false; };
+        let Some(ast::MetaItemKind::List(meta_items)) = normal_attr.item.meta_kind() else { return false; };
+        match_attr_name(attr, tool, name) && meta_items.iter().any(|meta_item| {
+            let Some(ast::MetaItem { path: meta_path, kind: ast::MetaItemKind::Word, .. }) = meta_item.meta_item() else { return false };
+            meta_path.segments.len() == 1 && meta_path.segments[0].ident.name == ident
+        })
+    }
+}

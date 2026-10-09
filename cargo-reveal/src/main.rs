@@ -153,6 +153,7 @@ fn main() {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .next_help_heading("Options")
+        .arg(clap::arg!(--color [WHEN] "Output coloring."))
         .arg(clap::arg!(Z: -Z [FLAG] "Experimental, unstable flags. See `-Z help` for details.").action(clap::ArgAction::Append))
         // Cargo options
         .next_help_heading("Package Selection")
@@ -182,11 +183,6 @@ fn main() {
         .arg(clap::arg!(--locked "Assert that `Cargo.lock` will remain unchanged."))
         .arg(clap::arg!(--offline "Run without accessing the network."))
         .arg(clap::arg!(--frozen "Equivalent to specifying both `--locked` and `--offline`."))
-        .next_help_heading("Options")
-        // FIXME: Regression; the `help` subcommand can no longer be customized,
-        //        so the about text does not match that of the help flags.
-        .arg(clap::arg!(-h --help "Print help information; this message or the help of the given subcommand.").action(clap::ArgAction::Help).global(true))
-        .arg(clap::arg!(-V --version "Print version information.").action(clap::ArgAction::Version).global(true))
         .get_matches_from(&args);
 
     let unstable_flags = matches.get_many::<String>("Z").into_iter().flatten().map(String::as_str).collect::<Vec<_>>();

@@ -1,32 +1,9 @@
 pub use rustc_middle::ty::*;
 
-use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::ty;
-use rustc_trait_selection::infer::InferCtxtExt;
+use rustc_span::Span;
 
 use crate::analysis::hir;
-use crate::codegen::symbols::{DUMMY_SP, Ident, Span, Symbol};
-
-pub fn impls_trait<'tcx>(tcx: TyCtxt<'tcx>, body_def_id: hir::LocalDefId, ty: Ty<'tcx>, trait_def_id: hir::DefId, args: Vec<ty::GenericArg<'tcx>>) -> bool {
-    let ty = tcx.erase_and_anonymize_regions(ty);
-    if ty.has_escaping_bound_vars() { return false; }
-
-    let infcx = tcx.infer_ctxt().build(ty::TypingMode::analysis_in_body(tcx, body_def_id));
-    let param_env = tcx.param_env(body_def_id);
-    infcx.type_implements_trait(trait_def_id, tcx.mk_args_trait(ty, args), param_env).must_apply_modulo_regions()
-}
-
-pub fn impl_assoc_ty<'tcx>(tcx: TyCtxt<'tcx>, caller_def_id: hir::LocalDefId, ty: Ty<'tcx>, trait_def_id: hir::DefId, args: Vec<ty::GenericArg<'tcx>>, assoc_ty: Symbol) -> Option<Ty<'tcx>> {
-    let typing_env = ty::TypingEnv::post_analysis(tcx, caller_def_id);
-
-    tcx.associated_items(trait_def_id)
-        .find_by_ident_and_kind(tcx, Ident::new(assoc_ty, DUMMY_SP), ty::AssocTag::Type, trait_def_id)
-        .and_then(|assoc_item| {
-            let args = tcx.mk_args_trait(ty, args);
-            let proj = Ty::new_projection(tcx, ty::IsRigid::No, assoc_item.def_id, args);
-            tcx.try_normalize_erasing_regions(typing_env, ty::Unnormalized::new(proj)).ok()
-        })
-}
 
 trait SpanFromGenericsExt {
     fn span_from_generics<'tcx>(self, tcx: TyCtxt<'tcx>, item_with_generics: hir::DefId) -> Span;

@@ -13,9 +13,7 @@ use rustc_session::config::ExternLocation;
 use rustc_span::{ExpnKind, DUMMY_SP, Ident, Span, Symbol, sym, kw};
 use rustc_span::hygiene::AstPass;
 
-use crate::analysis::call_graph::{Call, CallKind};
 use crate::analysis::hir::{self, CRATE_DEF_ID, CRATE_MOD_ID, LOCAL_CRATE, DefKind, Res};
-use crate::analysis::hir::intravisit::Visitor;
 use crate::analysis::ty::{self, Ty};
 use crate::codegen::ast;
 
@@ -169,62 +167,6 @@ pub fn item_children<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::DefId) -> Box<dyn Ite
     }
 }
 
-pub fn item_child_by_symbol<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::DefId, symbol: Symbol) -> Option<ItemChild> {
-    item_children(tcx, def_id).find(|child| child.ident.name == symbol)
-}
-
-pub fn item_child_by_ident<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::DefId, ident: Ident) -> Option<ItemChild> {
-    item_children(tcx, def_id).find(|child| child.ident == ident)
-}
-
-pub fn def_path_res<'tcx>(tcx: TyCtxt<'tcx>, path: &[Symbol]) -> Res {
-    fn find_crate(tcx: TyCtxt<'_>, symbol: Symbol) -> Option<hir::DefId> {
-        if tcx.crate_name(LOCAL_CRATE) == symbol { return Some(LOCAL_CRATE.as_def_id()); }
-
-        tcx.crates(()).iter().copied()
-            .find(|&num| tcx.crate_name(num) == symbol)
-            .map(hir::CrateNum::as_def_id)
-    }
-
-    let (base, first, path) = match *path {
-        [base, first, ref path @ ..] => (base, first, path),
-        [primitive] => return hir::PrimTy::from_name(primitive).map_or(Res::Err, Res::PrimTy),
-        _ => return Res::Err,
-    };
-
-    let Some(first) = find_crate(tcx, base).and_then(|id| item_child_by_symbol(tcx, id, first)) else { return Res::Err };
-
-    path.iter().copied()
-        .try_fold(first.res, |res, segment| {
-            let def_id = res.def_id();
-
-            if let Some(item) = item_child_by_symbol(tcx, def_id, segment) {
-                Some(item.res)
-            } else if matches!(res, Res::Def(DefKind::Enum | DefKind::Struct, _)) {
-                tcx.inherent_impls(def_id).iter()
-                    .find_map(|&impl_def_id| item_child_by_symbol(tcx, impl_def_id, segment))
-                    .map(|child| child.res)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(Res::Err)
-}
-
-pub fn trait_def_id<'tcx>(tcx: TyCtxt<'tcx>, path: &[Symbol]) -> Option<hir::DefId> {
-    match def_path_res(tcx, path) {
-        Res::Def(DefKind::Trait | DefKind::TraitAlias, trait_id) => Some(trait_id),
-        _ => None,
-    }
-}
-
-pub fn fn_def_id<'tcx>(tcx: TyCtxt<'tcx>, path: &[Symbol]) -> Option<hir::DefId> {
-    match def_path_res(tcx, path) {
-        Res::Def(DefKind::Fn | DefKind::AssocFn, trait_id) => Some(trait_id),
-        _ => None,
-    }
-}
-
 pub fn parent_iter<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::DefId) -> DefIdParentIter<'tcx> {
     DefIdParentIter { tcx, def_id }
 }
@@ -265,123 +207,6 @@ pub fn def_hir_path<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::LocalDefId) -> Vec<(hi
     path.push((def_hir_id, def_node));
 
     path
-}
-
-pub fn qpath_res<'tcx>(typeck: &'tcx ty::TypeckResults<'tcx>, qpath: &'tcx hir::QPath<'tcx>, id: hir::HirId) -> Res {
-    match qpath {
-        hir::QPath::Resolved(_, path) => path.res,
-        hir::QPath::TypeRelative(..) => {
-            typeck.type_dependent_def(id)
-                .map_or(Res::Err, |(kind, def_id)| Res::Def(kind, def_id))
-        }
-    }
-}
-
-pub fn callee<'tcx>(typeck: &'tcx ty::TypeckResults<'tcx>, expr: &'tcx hir::Expr<'tcx>) -> Option<(hir::DefId, ty::GenericArgsRef<'tcx>)> {
-    match expr.kind {
-        hir::ExprKind::Call(expr, _) => {
-            let &ty::TyKind::FnDef(def_id, generic_args) = typeck.node_type(expr.hir_id).kind() else { return None; };
-            // See https://github.com/rust-lang/rust/pull/158632.
-            let generic_args = generic_args.no_bound_vars().unwrap();
-            Some((def_id, generic_args))
-        }
-
-        | hir::ExprKind::MethodCall(_, _, _, _)
-        // NOTE: In addition to explicit function calls and method calls, certain operators
-        //       may also result in implicit calls to corresponding trait functions.
-        | hir::ExprKind::Unary(_, _)
-        | hir::ExprKind::Binary(_, _, _)
-        | hir::ExprKind::AssignOp(_, _, _)
-        | hir::ExprKind::Index(_, _, _)
-        => {
-            let Some(def_id) = typeck.type_dependent_def_id(expr.hir_id) else { return None; };
-            let generic_args = typeck.node_args(expr.hir_id);
-            Some((def_id, generic_args))
-        }
-
-        _ => None,
-    }
-}
-
-struct CalleeCollector<'tcx> {
-    typeck: &'tcx ty::TypeckResults<'tcx>,
-    current_scope_safety: hir::Safety,
-    callees: Vec<Call<'tcx>>,
-}
-
-impl<'tcx> hir::intravisit::Visitor<'tcx> for CalleeCollector<'tcx> {
-    fn visit_block(&mut self, block: &'tcx hir::Block<'tcx>) {
-        let previous_scope_safety = self.current_scope_safety;
-        self.current_scope_safety = match block.rules {
-            hir::BlockCheckMode::DefaultBlock => self.current_scope_safety,
-            hir::BlockCheckMode::UnsafeBlock(_) => hir::Safety::Unsafe,
-        };
-
-        hir::intravisit::walk_block(self, block);
-
-        self.current_scope_safety = previous_scope_safety;
-    }
-
-    fn visit_expr(&mut self, expr: &'tcx hir::Expr<'tcx>) {
-        if let Some((def_id, generic_args)) = callee(self.typeck, expr) {
-            self.callees.push(Call {
-                kind: CallKind::Def(def_id, generic_args),
-                safety: self.current_scope_safety,
-                span: expr.span,
-            });
-        }
-
-        hir::intravisit::walk_expr(self, expr);
-    }
-}
-
-pub fn collect_callees<'tcx>(tcx: TyCtxt<'tcx>, body: &'tcx hir::Body<'tcx>) -> Vec<Call<'tcx>> {
-    let typeck = tcx.typeck_body(body.id());
-
-    fn header_safety(header_safety: hir::HeaderSafety) -> hir::Safety {
-        match header_safety {
-            hir::HeaderSafety::Normal(safety) => safety,
-            hir::HeaderSafety::SafeTargetFeatures => hir::Safety::Unsafe,
-        }
-    }
-
-    let body_owner = tcx.hir_node(tcx.hir_body_owner(body.id()));
-    let body_safety = match body_owner {
-        hir::Node::Item(item) => {
-            match &item.kind {
-                hir::ItemKind::Fn { sig, .. } => header_safety(sig.header.safety),
-                _ => hir::Safety::Safe,
-            }
-        }
-        hir::Node::ForeignItem(item) => {
-            match &item.kind {
-                hir::ForeignItemKind::Fn(_, _, _) => hir::Safety::Unsafe,
-                _ => hir::Safety::Safe,
-            }
-        }
-        hir::Node::TraitItem(item) => {
-            match &item.kind {
-                hir::TraitItemKind::Fn(sig, _) => header_safety(sig.header.safety),
-                _ => hir::Safety::Safe,
-            }
-        }
-        hir::Node::ImplItem(item) => {
-            match &item.kind {
-                hir::ImplItemKind::Fn(sig, _) => header_safety(sig.header.safety),
-                _ => hir::Safety::Safe,
-            }
-        }
-        _ => hir::Safety::Safe,
-    };
-
-    let mut collector = CalleeCollector {
-        typeck,
-        current_scope_safety: body_safety,
-        callees: vec![],
-    };
-    collector.visit_body(body);
-
-    collector.callees
 }
 
 #[derive(Clone, Debug)]
@@ -921,73 +746,5 @@ pub fn visible_def_path<'tcx>(
     match lexical_def_path(tcx, def_id, scope) {
         Ok(visible_path) => Ok(visible_path),
         Err(adjusted_scope) => Err(Some(adjusted_scope)),
-    }
-}
-
-macro interned {
-    (@STRINGIFY_PATH, $path:path) => { stringify!($path) },
-
-    (@ITEM_IMPL, $kind_fn:ident, $kind_display_name:expr, $ident:ident, ::$($path:ident)::+) => {
-        mod $ident {
-            use super::*;
-            use std::sync::OnceLock;
-
-            pub(super) static CELL: OnceLock<hir::DefId> = OnceLock::new();
-        }
-
-        #[doc = concat!("`", interned!(@STRINGIFY_PATH, ::$($path)::+), "`")]
-        pub fn $ident(tcx: TyCtxt) -> hir::DefId {
-            *$ident::CELL.get_or_init(||
-                $kind_fn(tcx, &[$(Symbol::intern(stringify!($path)),)+])
-                    .expect(concat!($kind_display_name, " ", interned!(@STRINGIFY_PATH, ::$($path)::+), " not available"))
-            )
-        }
-    },
-
-    (@ITEM, trait, $ident:ident, ::$($path:ident)::+) => {
-        interned!(@ITEM_IMPL, trait_def_id, "trait", $ident, ::$($path)::+);
-    },
-    (@ITEM, fn, $ident:ident, ::$($path:ident)::+) => {
-        interned!(@ITEM_IMPL, fn_def_id, "function", $ident, ::$($path)::+);
-    },
-
-    ($($kind:tt $ident:ident (::$($path:ident)::+)),* $(,)?) => {
-        $(
-            interned!(@ITEM, $kind, $ident, ::$($path)::+);
-        )*
-    },
-}
-
-#[allow(non_snake_case)]
-pub mod traits {
-    super::interned! {
-        trait Default (::core::default::Default),
-
-        trait Add (::core::ops::Add),
-        trait AddAssign (::core::ops::AddAssign),
-        trait BitAnd (::core::ops::BitAnd),
-        trait BitAndAssign (::core::ops::BitAndAssign),
-        trait BitOr (::core::ops::BitOr),
-        trait BitOrAssign (::core::ops::BitOrAssign),
-        trait BitXor (::core::ops::BitXor),
-        trait BitXorAssign (::core::ops::BitXorAssign),
-        trait Div (::core::ops::Div),
-        trait DivAssign (::core::ops::DivAssign),
-        trait Mul (::core::ops::Mul),
-        trait MulAssign (::core::ops::MulAssign),
-        trait Rem (::core::ops::Rem),
-        trait RemAssign (::core::ops::RemAssign),
-        trait Shl (::core::ops::Shl),
-        trait ShlAssign (::core::ops::ShlAssign),
-        trait Shr (::core::ops::Shr),
-        trait ShrAssign (::core::ops::ShrAssign),
-        trait Sub (::core::ops::Sub),
-        trait SubAssign (::core::ops::SubAssign),
-    }
-}
-
-pub mod fns {
-    super::interned! {
-        fn default (::core::default::Default::default),
     }
 }

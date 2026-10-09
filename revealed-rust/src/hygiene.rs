@@ -1514,7 +1514,7 @@ impl<'tcx, 'op> ast::mut_visit::MutVisitor for MacroExpansionSanitizer<'tcx, 'op
                     self.visit_vis(&mut item.vis);
 
                     // FIXME: Resolutions for the prelude import path are missing; ignore.
-                    if !item.attrs.iter().any(|attr| attr.is_word() && attr.has_name(sym::prelude_import)) {
+                    if !item.attrs.iter().any(|attr| ast::inspect::is_word_attr(attr, None, sym::prelude_import)) {
                         self.sanitize_use_tree(use_tree, id, span);
                     }
                     return smallvec![item];
@@ -1996,7 +1996,7 @@ pub fn sanitize_macro_expansions<'tcx>(tcx: TyCtxt<'tcx>, crate_res: &res::Crate
 
     for &allow_internal_unstable in &sanitizer.allow_internal_unstables {
         // #![feature($allow_internal_unstable)]
-        if !krate.attrs.iter().any(|attr| attr.has_name(sym::feature) && attr.meta_item_list().is_some_and(|items| items.iter().any(|item| item.is_word() && item.has_name(allow_internal_unstable)))) {
+        if !krate.attrs.iter().any(|attr| ast::inspect::is_list_attr_with_ident(attr, None, sym::feature, allow_internal_unstable)) {
             let feature_allow_internal_unstable_attr = ast::attr::mk_attr_nested_word(g, ast::AttrStyle::Inner, ast::Safety::Default, sym::feature, allow_internal_unstable, DUMMY_SP);
             krate.attrs.push(feature_allow_internal_unstable_attr);
         }
@@ -2008,7 +2008,7 @@ pub fn sanitize_macro_expansions<'tcx>(tcx: TyCtxt<'tcx>, crate_res: &res::Crate
     macro ensure_attrs($(#![$meta:ident($kind:ident)])+) {
         $(
             let kind = Symbol::intern(stringify!($kind));
-            if !krate.attrs.iter().any(|attr| attr.has_name(sym::$meta) && attr.meta_item_list().is_some_and(|items| items.iter().any(|item| item.is_word() && item.has_name(kind)))) {
+            if !krate.attrs.iter().any(|attr| ast::inspect::is_list_attr_with_ident(attr, None, sym::$meta, kind)) {
                 let attr = ast::attr::mk_attr_nested_word(g, ast::AttrStyle::Inner, ast::Safety::Default, sym::$meta, kind, DUMMY_SP);
                 krate.attrs.push(attr);
             }

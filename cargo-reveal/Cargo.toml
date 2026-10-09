@@ -15,3 +15,12 @@ edition = "2024"
 rustc_private = true
 
 [dependencies]
+reveal-rust-driver-cli = { path = "../reveal-rust-driver-cli" }
+
+cargo_metadata = "0.23"
+clap = { version = "4", features = ["cargo"] }
+color-print = "0.3"
+
+[build-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "1"

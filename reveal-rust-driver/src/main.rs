@@ -103,9 +103,15 @@ pub fn main() -> process::ExitCode {
     let cargo_invocation = rustc_session::utils::was_invoked_from_cargo();
     let primary_package = env::var("CARGO_PRIMARY_PACKAGE").is_ok();
 
-    let reveal_rust_args = None
+    let mut reveal_rust_args = None
         .or_else(|| env::var("REVEAL_RUST_ENCODED_ARGS").ok().map(|args| args.split('\x1F').map(ToOwned::to_owned).collect::<Vec<_>>()))
         .or_else(|| env::var("REVEAL_RUST_ARGS").ok().map(|args| args.split(' ').map(ToOwned::to_owned).collect::<Vec<_>>()));
+    // Clean up empty argument list.
+    // NOTE: `str::split` produces a single empty string if the splitted string is empty,
+    //       which then causes clap's argument parsing to produce an error.
+    if let Some(args) = &reveal_rust_args && let [s] = &args[..] && s == "" {
+        reveal_rust_args = Some(vec![]);
+    }
     let reveal_rust_args_str = reveal_rust_args.as_ref().map(|reveal_rust_args| reveal_rust_args.join(" "));
 
     // Fall back to a rustc invocation if reveal-rust is not "enabled" for the given crate based on invocation.

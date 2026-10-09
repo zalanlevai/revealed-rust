@@ -402,7 +402,7 @@ fn lexical_def_path<'tcx>(tcx: TyCtxt<'tcx>, def_id: hir::DefId, mut scope: hir:
 /// See `tests/ui/hygiene/paths/doc_hidden_reexport_of_transitive_dep_item`.
 ///
 /// Do not use directly, instead call `TyCtxt::visible_parent_map` as normal.
-/// A query override is applied for any "active" invocations of mutest-driver.
+/// A query override is applied for any "active" invocations of reveal-rust-driver.
 // TODO: Remove once our fix is accepted into upstream and
 //       we upgrade to a version of the toolchain with the fix applied.
 pub fn visible_parent_map<'tcx>(tcx: TyCtxt<'tcx>) -> hir::DefIdMap<hir::DefId> {

@@ -1,22 +1,16 @@
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [package]
-name = "reveal-rust-driver"
+name = "reveal-rust-driver-cli"
 version = "0.0.0"
 authors = ["Zalán Bálint Lévai"]
-description = "Reveal the Rust code behind macro expansions, type and name resolution, and elision."
+description = "Shared CLI definitions between reveal-rust-driver and cargo-reveal."
 keywords = ["macros", "macro-expansion", "testing"]
 categories = ["development-tools::testing", "development-tools::debugging", "development-tools::cargo-plugins", "security"]
 repository = "https://github.com/zalanlevai/revealed-rust"
 license = "Apache-2.0 OR MIT"
 edition = "2024"
 
-[package.metadata.rust-analyzer]
-rustc_private = true
-
 [dependencies]
-reveal-rust-driver-cli = { path = "../reveal-rust-driver-cli" }
-revealed-rust = { path = "../revealed-rust" }
-
 clap = { version = "4", features = ["cargo"] }
 color-print = "0.3"

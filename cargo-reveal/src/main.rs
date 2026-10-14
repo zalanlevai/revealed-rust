@@ -2,9 +2,10 @@
 
 use std::env;
 use std::path::PathBuf;
-use std::process::{self, Command};
+use std::process::{self, Command, Stdio};
 
 use reveal_rust_driver_cli::{UnstableFlag, UnstableOption};
+use serde::Deserialize;
 
 pub mod build {
     pub const RUST_TOOLCHAIN_VERSION: &str = env!("RUST_TOOLCHAIN_VERSION");
@@ -207,7 +208,9 @@ fn main() {
     //       whether specified explicitly through `--target-dir`, or implicitly chosen by Cargo.
     cargo_invocation.target_dir.push("reveal");
 
-    run_cargo_with_reveal_rust_driver(&cargo_invocation, &matches, &unstable_flags);
+    let reveal_targets = resolve_reveal_targets(&cargo_invocation);
+
+    run_cargo_with_reveal_rust_driver(&cargo_invocation, &reveal_targets, &matches, &unstable_flags);
 }
 
 struct CargoInvocation<'a> {
@@ -216,6 +219,7 @@ struct CargoInvocation<'a> {
     target_dir: PathBuf,
     #[expect(unused)]
     explicit_targetings_count: usize,
+    cargo_metadata: cargo_metadata::Metadata,
 }
 
 fn process_cargo_args<'a>(args: &'a [String], matches: &'a clap::ArgMatches) -> CargoInvocation<'a> {
@@ -347,10 +351,115 @@ fn process_cargo_args<'a>(args: &'a [String], matches: &'a clap::ArgMatches) -> 
         strip_arg(&mut non_cargo_args, false, None, Some("frozen"));
     }
 
-    CargoInvocation { cargo_args, non_cargo_args, target_dir, explicit_targetings_count }
+    CargoInvocation { cargo_args, non_cargo_args, target_dir, explicit_targetings_count, cargo_metadata }
 }
 
-fn run_cargo_with_reveal_rust_driver(cargo_invocation: &CargoInvocation, _matches: &clap::ArgMatches, _unstable_flags: &[&str]) {
+// Mirrors `cargo::compiler::CompileMode`.
+#[derive(Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum UnitMode {
+    Test,
+    Build,
+    Check,
+    Doc,
+    Doctest,
+    Docscrape,
+    RunCustomBuild,
+}
+
+#[derive(Deserialize)]
+struct Unit {
+    pkg_id: cargo_metadata::PackageId,
+    target: cargo_metadata::Target,
+    mode: UnitMode,
+    platform: Option<String>,
+    features: Vec<cargo_metadata::FeatureName>,
+}
+
+#[derive(Deserialize)]
+struct UnitGraph {
+    units: Vec<Unit>,
+    roots: Vec<usize>,
+}
+
+struct RevealTarget {
+    package_name: String,
+    target_name: String,
+    crate_name: String,
+    src_path: PathBuf,
+    codegen: bool,
+    test: bool,
+    platform: Option<String>,
+    features: Vec<String>,
+}
+
+fn resolve_reveal_targets(cargo_invocation: &CargoInvocation) -> Vec<RevealTarget> {
+    let mut unit_graph_cmd = cargo_command_base();
+    unit_graph_cmd.args(["check", "-Zunstable-options", "--unit-graph"]);
+    unit_graph_cmd.args(&cargo_invocation.cargo_args);
+    unit_graph_cmd.stderr(Stdio::inherit());
+    let unit_graph_output = unit_graph_cmd.output().expect("could not retrieve Cargo unit graph");
+
+    let unit_graph = serde_json::from_slice::<UnitGraph>(&unit_graph_output.stdout).expect("invalid Cargo unit graph");
+
+    let mut reveal_targets = Vec::with_capacity(unit_graph.roots.len());
+    // NOTE: The root units in the unit graph correspond to the Cargo targets that are
+    //       selected as the primary targets in the given Cargo invocation.
+    for &root_unit_idx in &unit_graph.roots {
+        let root_unit = &unit_graph.units[root_unit_idx];
+
+        let Some(package) = cargo_invocation.cargo_metadata.packages.iter().find(|package| package.id == root_unit.pkg_id) else {
+            panic!("cannot find package in Cargo metadata");
+        };
+
+        let crate_name = root_unit.target.name.replace("-", "_");
+
+        let codegen = match root_unit.mode {
+            UnitMode::Test | UnitMode::Build => true,
+            UnitMode::Check => false,
+            // NOTE: None of these invoke rustc or any rustc driver.
+            UnitMode::Doc | UnitMode::Doctest | UnitMode::Docscrape | UnitMode::RunCustomBuild => { continue; }
+        };
+
+        let test = match root_unit.mode {
+            UnitMode::Test => true,
+            UnitMode::Build => false,
+            // NOTE: This represents either
+            //       `cargo::compiler::CompileMode::Check { test: false }` or
+            //       `cargo::compiler::CompileMode::Check { test: true }`.
+            //       The value of the test field is lost in the unit graph serialization.
+            UnitMode::Check => 'arm: {
+                // NOTE: When both variants are present, only the test variant is a root unit,
+                //       and the non-test variant is a dependency-only unit.
+                let Some((twin_in_check_pair_unit_idx, _)) = unit_graph.units.iter().enumerate().find(|&(i, unit)| {
+                    i != root_unit_idx
+                        && unit.pkg_id == root_unit.pkg_id
+                        && unit.target.src_path == root_unit.target.src_path
+                        && unit.mode == root_unit.mode
+                        && unit.platform == root_unit.platform
+                        && unit.features == root_unit.features
+                }) else { break 'arm false; };
+                unit_graph.roots.contains(&twin_in_check_pair_unit_idx)
+            }
+            UnitMode::Doc | UnitMode::Doctest | UnitMode::Docscrape | UnitMode::RunCustomBuild => unreachable!(),
+        };
+
+        reveal_targets.push(RevealTarget {
+            package_name: package.name.as_ref().to_owned(),
+            target_name: root_unit.target.name.clone(),
+            crate_name,
+            src_path: root_unit.target.src_path.clone().into_std_path_buf(),
+            codegen,
+            test,
+            platform: root_unit.platform.clone(),
+            features: root_unit.features.iter().map(|n| n.as_ref().to_owned()).collect::<Vec<_>>(),
+        })
+    }
+
+    reveal_targets
+}
+
+fn run_cargo_with_reveal_rust_driver(cargo_invocation: &CargoInvocation, reveal_targets: &[RevealTarget], _matches: &clap::ArgMatches, _unstable_flags: &[&str]) {
     let reveal_rust_args = cargo_invocation.non_cargo_args.clone();
 
     let mut cmd = cargo_command_base();
@@ -371,6 +480,20 @@ fn run_cargo_with_reveal_rust_driver(cargo_invocation: &CargoInvocation, _matche
     cmd.env("RUSTC_WORKSPACE_WRAPPER", path);
 
     cmd.env("REVEAL_RUST_ENCODED_ARGS", reveal_rust_args.join("\x1F"));
+
+    // NOTE: The driver identifies the crates to reveal among all crates Cargo invokes rustc on
+    //       based on their package name, crate root source file, and whether they are compiled in test mode,
+    //       as well as some other options for which the selected build units' values are passed here.
+    cmd.env("REVEAL_RUST_SELECTED_CARGO_TARGETS", reveal_rust_driver_cli::encode_reveal_targets(reveal_targets.iter().map(|reveal_target| {
+        reveal_rust_driver_cli::RevealTarget {
+            package_name: reveal_target.package_name.clone(),
+            src_path: reveal_target.src_path.clone(),
+            codegen: reveal_target.codegen,
+            test: reveal_target.test,
+            platform: reveal_target.platform.clone(),
+            features: reveal_target.features.clone(),
+        }
+    })));
 
     let exit_status = cmd
         .spawn().expect("failed to run Cargo")

@@ -80,6 +80,7 @@ dependencies = [
  "color-print",
  "reveal-rust-driver-cli",
  "serde",
+ "serde_json",
  "toml",
 ]
 

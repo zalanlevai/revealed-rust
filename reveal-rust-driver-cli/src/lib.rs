@@ -1,6 +1,74 @@
 #![feature(decl_macro)]
+#![feature(iter_intersperse)]
 
+use std::borrow::Borrow;
+use std::path::PathBuf;
 use std::process;
+
+pub struct RevealTarget {
+    pub package_name: String,
+    pub src_path: PathBuf,
+    pub codegen: bool,
+    pub test: bool,
+    pub platform: Option<String>,
+    pub features: Vec<String>,
+}
+
+pub fn encode_reveal_targets<'a, T, I>(reveal_targets: I) -> String
+where
+    T: Borrow<RevealTarget>,
+    I: IntoIterator<Item = T>,
+{
+    reveal_targets.into_iter()
+        .map(|reveal_target| {
+            let reveal_target = reveal_target.borrow();
+            let package_name = &reveal_target.package_name;
+            let src_path = reveal_target.src_path.display();
+            let codegen = match reveal_target.codegen {
+                true => "codegen",
+                false => "metadata",
+            };
+            let test = match reveal_target.test {
+                true => "test",
+                false => "notest",
+            };
+            let platform = reveal_target.platform.as_deref().unwrap_or_default();
+            let features = reveal_target.features.join(",");
+            format!("{}\x1F{}\x1F{}\x1F{}\x1F{}\x1F{}", package_name, src_path, codegen, test, platform, features)
+        })
+        .intersperse("\x1E".to_owned())
+        .collect::<String>()
+}
+
+pub fn decode_reveal_targets(s: &str) -> Vec<RevealTarget> {
+    if s.is_empty() { return vec![]; }
+
+    s.split('\x1E')
+        .map(|entry| {
+            let [package_name, src_path, codegen, test, platform, features] = entry.split('\x1F').collect::<Vec<_>>()[..] else {
+                panic!("invalid selected targets spec");
+            };
+            let package_name = package_name.to_owned();
+            let src_path = PathBuf::from(src_path);
+            let codegen = match codegen {
+                "codegen" => true,
+                "metadata" => false,
+                _ => panic!("invalid selected targets spec"),
+            };
+            let test = match test {
+                "test" => true,
+                "notest" => false,
+                _ => panic!("invalid selected targets spec"),
+            };
+            let platform = match platform {
+                "" => None,
+                platform => Some(platform.to_owned()),
+            };
+            let features = features.split(',').map(ToOwned::to_owned).collect::<Vec<_>>();
+            RevealTarget { package_name, src_path, codegen, test, platform, features }
+        })
+        .collect::<Vec<_>>()
+}
 
 pub macro extend_const_slice($base:path: &[$ty:ty], $ext:expr) {
     &const {

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use reveal_rust_driver::config::{self, Config};
-use reveal_rust_driver_cli::{UnstableFlag, UnstableOption};
+use reveal_rust_driver_cli::{RevealTarget, UnstableFlag, UnstableOption};
 use rustc_interface::Config as CompilerConfig;
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
@@ -30,6 +30,37 @@ impl rustc_driver::Callbacks for RustcCallbacks {
             reveal_rust_driver::compiler::track_invocation_fingerprint(sess, args.as_deref());
         }));
     }
+}
+
+fn fetch_reveal_target(args: &[String], compiler_config: &CompilerConfig) -> Option<RevealTarget> {
+    let selected_cargo_targets = reveal_rust_driver_cli::decode_reveal_targets(&env::var("REVEAL_RUST_SELECTED_CARGO_TARGETS").ok()?);
+
+    let Some(cargo_package_name) = env::var("CARGO_PKG_NAME").ok() else {
+        panic!("invalid Cargo invocation: missing `CARGO_PKG_NAME` environment variable");
+    };
+
+    let input_file_path = compiler_config.input.opt_path().expect("cannot get input file path").to_owned();
+    let input_file_path = input_file_path.canonicalize().expect("cannot canonicalize input file path");
+
+    let codegen = compiler_config.opts.output_types.should_codegen();
+    // HACK: Cargo explicitly does not pass `--crate-type` to its test rustc invocations,
+    //       while `--test` and `--cfg test` could be passed through RUSTFLAGS to all rustc invocations.
+    let test = compiler_config.opts.crate_types.is_empty();
+
+    let platform = args.iter().any(|arg| arg == "--target" || arg.starts_with("--target=")).then_some(compiler_config.opts.target_triple.tuple());
+
+    let features = compiler_config.crate_cfg.iter()
+        .filter_map(|cfg| cfg.strip_prefix("features=\"")?.strip_suffix("\""))
+        .collect::<Vec<_>>();
+
+    selected_cargo_targets.into_iter().find(|reveal_target| {
+        reveal_target.package_name == cargo_package_name
+            && reveal_target.src_path == input_file_path
+            && reveal_target.codegen == codegen
+            && reveal_target.test == test
+            && reveal_target.platform.as_deref() == platform
+            && reveal_target.features == features
+    })
 }
 
 const UNSTABLE_FLAGS: &[UnstableFlag] = reveal_rust_driver_cli::extend_const_slice!(reveal_rust_driver_cli::UNSTABLE_FLAGS: &[UnstableFlag], &[
@@ -138,6 +169,13 @@ pub fn main() -> process::ExitCode {
             early_dcx.early_fatal("no compiler configuration was generated");
         };
 
+        let reveal_target = fetch_reveal_target(&args, &compiler_config);
+
+        // Fall back to a rustc invocation if reveal-rust is not "enabled" for the given crate based on its parsed configuration.
+        if info_query || (cargo_invocation && !primary_package && reveal_target.is_none()) {
+            return rustc_driver::run_compiler(&args, &mut RustcCallbacks { reveal_rust_args: reveal_rust_args_str });
+        }
+
         let _early_dcx = EarlyDiagCtxt::new(compiler_config.opts.error_format);
 
         let reveal_rust_target_dir_root = env::var("REVEAL_RUST_TARGET_DIR_ROOT").ok().map(PathBuf::from);
@@ -151,7 +189,7 @@ pub fn main() -> process::ExitCode {
 
         let config = Config {
             compiler_config,
-            invocation_fingerprint: reveal_rust_args_str,
+            invocation_fingerprint: reveal_rust_args_str.clone(),
             reveal_rust_target_dir_root,
             opts: config::Options {
                 verbosity,
@@ -162,5 +200,10 @@ pub fn main() -> process::ExitCode {
         };
 
         reveal_rust_driver::run(config).unwrap();
+
+        // Compile the crate as usual too, for use as a dependency.
+        if cargo_invocation {
+            rustc_driver::run_compiler(&args, &mut RustcCallbacks { reveal_rust_args: reveal_rust_args_str })
+        }
     })
 }

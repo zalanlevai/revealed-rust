@@ -414,6 +414,11 @@ fn resolve_reveal_targets(cargo_invocation: &CargoInvocation, output_root_dir_pa
     unit_graph_cmd.args(&cargo_invocation.cargo_args);
     unit_graph_cmd.stderr(Stdio::inherit());
     let unit_graph_output = unit_graph_cmd.output().expect("could not retrieve Cargo unit graph");
+    if !unit_graph_output.status.success() {
+        // NOTE: Exit after the underlying Cargo invocation prints its own error
+        //       (typically this means that no target was selected because of some invalid targeting options).
+        process::exit(unit_graph_output.status.code().unwrap_or(101));
+    }
 
     let unit_graph = serde_json::from_slice::<UnitGraph>(&unit_graph_output.stdout).expect("invalid Cargo unit graph");
 

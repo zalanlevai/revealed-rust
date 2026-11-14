@@ -1,6 +1,7 @@
 #![feature(trim_prefix_suffix)]
 
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 
@@ -214,6 +215,8 @@ fn main() {
     let reveal_targets = resolve_reveal_targets(&cargo_invocation, &output_root_dir_path);
 
     run_cargo_with_reveal_rust_driver(&cargo_invocation, &reveal_targets, &matches, &unstable_flags);
+
+    report_revealed_targets(&reveal_targets);
 }
 
 struct CargoInvocation<'a> {
@@ -408,6 +411,32 @@ struct RevealTarget {
     output_dir_path: PathBuf,
 }
 
+impl RevealTarget {
+    fn display_str(&self) -> String {
+        let target_name = match self.cargo_target_kind {
+            CargoTargetKind::Lib => "lib".to_owned(),
+            // NOTE: Match Cargo's output, which prints the target name even for "main" binary targets.
+            CargoTargetKind::MainBin | CargoTargetKind::Bin => format!("bin \"{}\"", self.target_name),
+            CargoTargetKind::Example => format!("example \"{}\"", self.target_name),
+            CargoTargetKind::Test => format!("test \"{}\"", self.target_name),
+            CargoTargetKind::Bench => format!("bench \"{}\"", self.target_name),
+        };
+        let target_mode = match (self.cargo_target_kind, self.test) {
+            (CargoTargetKind::Test | CargoTargetKind::Bench, _) => "",
+            (_, true) => " test",
+            _ => "",
+        };
+        format!("`{}` ({}{})", self.package_name, target_name, target_mode)
+    }
+
+    fn output_src_path(&self) -> PathBuf {
+        let Some(src_file_name) = self.src_path.file_name() else {
+            panic!("invalid target source path: no file name");
+        };
+        self.output_dir_path.join(src_file_name)
+    }
+}
+
 fn resolve_reveal_targets(cargo_invocation: &CargoInvocation, output_root_dir_path: &Path) -> Vec<RevealTarget> {
     let mut unit_graph_cmd = cargo_command_base();
     unit_graph_cmd.args(["check", "-Zunstable-options", "--unit-graph"]);
@@ -586,5 +615,26 @@ fn run_cargo_with_reveal_rust_driver(cargo_invocation: &CargoInvocation, reveal_
     let exit_code = exit_status.code();
     if exit_code != Some(0) && exit_code != Some(101) {
         process::exit(exit_code.unwrap_or(-1));
+    }
+}
+
+fn report_revealed_targets(reveal_targets: &[RevealTarget]) {
+    if let [reveal_target] = reveal_targets && let Ok(revealed_src) = fs::read_to_string(reveal_target.output_src_path()) {
+        println!("{}", revealed_src);
+    }
+
+    for reveal_target in reveal_targets {
+        let output_src_path = reveal_target.output_src_path();
+        let mut output_src_path = &*output_src_path;
+        if let Ok(current_dir) = env::current_dir() {
+            output_src_path = output_src_path.trim_prefix(current_dir);
+        }
+
+        match fs::exists(&output_src_path) {
+            // NOTE: This replicates Cargo's action message styling, including the color and justification.
+            Ok(true) => color_print::ceprintln!("<green,bold>{:>12}</> {} at `{}`", "Revealed", reveal_target.display_str(), output_src_path.display()),
+            Ok(false) => color_print::ceprintln!("<yellow,bold>warning</>: no revealed source produced for {}", reveal_target.display_str()),
+            Err(error) => color_print::ceprintln!("<yellow,bold>warning</>: cannot read revealed source produced for {}: {}", reveal_target.display_str(), error),
+        }
     }
 }

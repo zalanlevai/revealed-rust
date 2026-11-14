@@ -179,6 +179,7 @@ pub fn main() -> process::ExitCode {
         let _early_dcx = EarlyDiagCtxt::new(compiler_config.opts.error_format);
 
         let reveal_rust_target_dir_root = env::var("REVEAL_RUST_TARGET_DIR_ROOT").ok().map(PathBuf::from);
+        let output_dir_path = reveal_target.as_ref().map(|reveal_target| reveal_target.output_dir_path.clone());
 
         let verbosity = reveal_rust_arg_matches.get_count("verbose");
         let report_timings = reveal_rust_arg_matches.get_flag("timings");
@@ -191,6 +192,7 @@ pub fn main() -> process::ExitCode {
             compiler_config,
             invocation_fingerprint: reveal_rust_args_str.clone(),
             reveal_rust_target_dir_root,
+            output_dir_path,
             opts: config::Options {
                 verbosity,
                 report_timings,

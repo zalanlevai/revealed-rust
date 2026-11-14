@@ -18,6 +18,7 @@ pub struct Config {
     pub compiler_config: CompilerConfig,
     pub invocation_fingerprint: Option<String>,
     pub reveal_rust_target_dir_root: Option<PathBuf>,
+    pub output_dir_path: Option<PathBuf>,
     pub opts: Options,
 }
 

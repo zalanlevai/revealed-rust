@@ -1,7 +1,7 @@
 #![feature(trim_prefix_suffix)]
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{self, Command, Stdio};
 
 use reveal_rust_driver_cli::{UnstableFlag, UnstableOption};
@@ -154,6 +154,7 @@ fn main() {
         .disable_help_flag(true)
         .disable_version_flag(true)
         .next_help_heading("Options")
+        .arg(clap::arg!(--"reveal-out-root-dir" [OUTPUT_ROOT_DIR] "Write revealed source files into the specified output directory. By default, revealed source files are written to `target/reveal/out`.").value_parser(clap::value_parser!(PathBuf)))
         .arg(clap::arg!(--color [WHEN] "Output coloring."))
         .arg(clap::arg!(Z: -Z [FLAG] "Experimental, unstable flags. See `-Z help` for details.").action(clap::ArgAction::Append))
         // Cargo options
@@ -208,7 +209,9 @@ fn main() {
     //       whether specified explicitly through `--target-dir`, or implicitly chosen by Cargo.
     cargo_invocation.target_dir.push("reveal");
 
-    let reveal_targets = resolve_reveal_targets(&cargo_invocation);
+    let output_root_dir_path = matches.get_one::<PathBuf>("reveal-out-root-dir").cloned().unwrap_or_else(|| cargo_invocation.target_dir.join("out"));
+
+    let reveal_targets = resolve_reveal_targets(&cargo_invocation, &output_root_dir_path);
 
     run_cargo_with_reveal_rust_driver(&cargo_invocation, &reveal_targets, &matches, &unstable_flags);
 }
@@ -382,18 +385,30 @@ struct UnitGraph {
     roots: Vec<usize>,
 }
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum CargoTargetKind {
+    Lib,
+    MainBin,
+    Bin,
+    Example,
+    Test,
+    Bench,
+}
+
 struct RevealTarget {
     package_name: String,
     target_name: String,
     crate_name: String,
+    cargo_target_kind: CargoTargetKind,
     src_path: PathBuf,
     codegen: bool,
     test: bool,
     platform: Option<String>,
     features: Vec<String>,
+    output_dir_path: PathBuf,
 }
 
-fn resolve_reveal_targets(cargo_invocation: &CargoInvocation) -> Vec<RevealTarget> {
+fn resolve_reveal_targets(cargo_invocation: &CargoInvocation, output_root_dir_path: &Path) -> Vec<RevealTarget> {
     let mut unit_graph_cmd = cargo_command_base();
     unit_graph_cmd.args(["check", "-Zunstable-options", "--unit-graph"]);
     unit_graph_cmd.args(&cargo_invocation.cargo_args);
@@ -413,6 +428,33 @@ fn resolve_reveal_targets(cargo_invocation: &CargoInvocation) -> Vec<RevealTarge
         };
 
         let crate_name = root_unit.target.name.replace("-", "_");
+
+        let cargo_target_kind = match () {
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::Bin) => {
+                // NOTE: We infer the main `bin` target based on whether its name matches the Cargo package name.
+                match package.name == root_unit.target.name {
+                    true => CargoTargetKind::MainBin,
+                    false => CargoTargetKind::Bin,
+                }
+            }
+            // NOTE: Build scripts cannot be root units.
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::CustomBuild) => { continue; }
+
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::Example) => CargoTargetKind::Example,
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::Test) => CargoTargetKind::Test,
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::Bench) => CargoTargetKind::Bench,
+
+            // NOTE: Cargo allows only one `lib` target for each package, so there is no need for the "main" distinction like with `bin` targets.
+            _ if root_unit.target.kind.contains(&cargo_metadata::TargetKind::Lib)
+                || root_unit.target.kind.contains(&cargo_metadata::TargetKind::RLib)
+                || root_unit.target.kind.contains(&cargo_metadata::TargetKind::DyLib)
+                || root_unit.target.kind.contains(&cargo_metadata::TargetKind::CDyLib)
+                || root_unit.target.kind.contains(&cargo_metadata::TargetKind::StaticLib)
+                || root_unit.target.kind.contains(&cargo_metadata::TargetKind::ProcMacro)
+            => CargoTargetKind::Lib,
+
+            _ => { continue; }
+        };
 
         let codegen = match root_unit.mode {
             UnitMode::Test | UnitMode::Build => true,
@@ -444,15 +486,37 @@ fn resolve_reveal_targets(cargo_invocation: &CargoInvocation) -> Vec<RevealTarge
             UnitMode::Doc | UnitMode::Doctest | UnitMode::Docscrape | UnitMode::RunCustomBuild => unreachable!(),
         };
 
+        let output_dir_path = {
+            let mut output_dir_path = output_root_dir_path.join(&*package.name);
+            match cargo_target_kind {
+                CargoTargetKind::Lib => output_dir_path.push("lib"),
+                CargoTargetKind::MainBin => output_dir_path.push("bin"),
+                CargoTargetKind::Bin => output_dir_path.extend(["bins", &crate_name]),
+                CargoTargetKind::Example => output_dir_path.extend(["examples", &crate_name]),
+                CargoTargetKind::Test => output_dir_path.extend(["tests", &crate_name]),
+                CargoTargetKind::Bench => output_dir_path.extend(["benches", &crate_name]),
+            }
+            // NOTE: Libraries, binaries, and examples may be revealed both in regular and in test mode,
+            //       so we have to place their test invocations into separate output directories.
+            if test && !matches!(cargo_target_kind, CargoTargetKind::Test | CargoTargetKind::Bench) {
+                // Append `.test` to the directory name of test invocations of targets that have non-test invocations.
+                // NOTE: Crate names cannot contain `.`, so these names cannot conflict with the name of other targets.
+                output_dir_path.set_extension("test");
+            }
+            output_dir_path
+        };
+
         reveal_targets.push(RevealTarget {
             package_name: package.name.as_ref().to_owned(),
             target_name: root_unit.target.name.clone(),
             crate_name,
+            cargo_target_kind,
             src_path: root_unit.target.src_path.clone().into_std_path_buf(),
             codegen,
             test,
             platform: root_unit.platform.clone(),
             features: root_unit.features.iter().map(|n| n.as_ref().to_owned()).collect::<Vec<_>>(),
+            output_dir_path,
         })
     }
 
@@ -492,6 +556,7 @@ fn run_cargo_with_reveal_rust_driver(cargo_invocation: &CargoInvocation, reveal_
             test: reveal_target.test,
             platform: reveal_target.platform.clone(),
             features: reveal_target.features.clone(),
+            output_dir_path: reveal_target.output_dir_path.clone(),
         }
     })));
 

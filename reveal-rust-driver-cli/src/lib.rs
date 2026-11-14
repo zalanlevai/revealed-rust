@@ -12,6 +12,7 @@ pub struct RevealTarget {
     pub test: bool,
     pub platform: Option<String>,
     pub features: Vec<String>,
+    pub output_dir_path: PathBuf,
 }
 
 pub fn encode_reveal_targets<'a, T, I>(reveal_targets: I) -> String
@@ -34,7 +35,8 @@ where
             };
             let platform = reveal_target.platform.as_deref().unwrap_or_default();
             let features = reveal_target.features.join(",");
-            format!("{}\x1F{}\x1F{}\x1F{}\x1F{}\x1F{}", package_name, src_path, codegen, test, platform, features)
+            let output_dir_path = reveal_target.output_dir_path.display();
+            format!("{}\x1F{}\x1F{}\x1F{}\x1F{}\x1F{}\x1F{}", package_name, src_path, codegen, test, platform, features, output_dir_path)
         })
         .intersperse("\x1E".to_owned())
         .collect::<String>()
@@ -45,7 +47,7 @@ pub fn decode_reveal_targets(s: &str) -> Vec<RevealTarget> {
 
     s.split('\x1E')
         .map(|entry| {
-            let [package_name, src_path, codegen, test, platform, features] = entry.split('\x1F').collect::<Vec<_>>()[..] else {
+            let [package_name, src_path, codegen, test, platform, features, output_dir_path] = entry.split('\x1F').collect::<Vec<_>>()[..] else {
                 panic!("invalid selected targets spec");
             };
             let package_name = package_name.to_owned();
@@ -65,7 +67,8 @@ pub fn decode_reveal_targets(s: &str) -> Vec<RevealTarget> {
                 platform => Some(platform.to_owned()),
             };
             let features = features.split(',').map(ToOwned::to_owned).collect::<Vec<_>>();
-            RevealTarget { package_name, src_path, codegen, test, platform, features }
+            let output_dir_path = PathBuf::from(output_dir_path);
+            RevealTarget { package_name, src_path, codegen, test, platform, features, output_dir_path }
         })
         .collect::<Vec<_>>()
 }

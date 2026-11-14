@@ -50,7 +50,7 @@ fn fetch_reveal_target(args: &[String], compiler_config: &CompilerConfig) -> Opt
     let platform = args.iter().any(|arg| arg == "--target" || arg.starts_with("--target=")).then_some(compiler_config.opts.target_triple.tuple());
 
     let features = compiler_config.crate_cfg.iter()
-        .filter_map(|cfg| cfg.strip_prefix("features=\"")?.strip_suffix("\""))
+        .filter_map(|cfg| cfg.strip_prefix("feature=\"")?.strip_suffix("\""))
         .collect::<Vec<_>>();
 
     selected_cargo_targets.into_iter().find(|reveal_target| {

@@ -10,6 +10,7 @@ pub mod compiler;
 pub mod config;
 
 use std::time::{Duration, Instant};
+use std::fs;
 
 use rustc_interface::{create_and_enter_global_ctxt, passes, run_compiler};
 use rustc_interface::interface::Result as CompilerResult;
@@ -94,13 +95,31 @@ pub fn run(config: Config) -> CompilerResult<RevealResult> {
             );
             reveal_result.codegen_duration = t_codegen_start.elapsed();
 
+            match &config.output_dir_path {
+                Some(output_dir_path) => {
+                    if let Err(error) = fs::create_dir_all(output_dir_path) {
+                        tcx.dcx().fatal(format!("cannot create output directory `{}`: {}", output_dir_path.display(), error));
+                    }
+
+                    let Some(src_path) = sess.io.input.file_name(sess).into_local_path() else {
+                        tcx.dcx().fatal("cannot determine revealed root source file name");
+                    };
+                    let Some(src_file_name) = src_path.file_name() else {
+                        tcx.dcx().fatal("cannot determine revealed root source file name");
+                    };
+                    let output_src_path = output_dir_path.join(src_file_name);
+                    if let Err(error) = fs::write(&output_src_path, &reveal_result.generated_crate_code) {
+                        tcx.dcx().fatal(format!("cannot write revealed crate source to `{}`: {}", output_src_path.display(), error));
+                    }
+                }
+                None => println!("{}", reveal_result.generated_crate_code),
+            }
+
             reveal_result.duration = t_start.elapsed();
 
             Ok(reveal_result)
         })
     })?;
-
-    println!("{}", reveal_result.generated_crate_code);
 
     if opts.report_timings {
         println!("\nfinished in {total:.2?} (hygiene {hygiene:.2?}; codegen {codegen:.2?})",

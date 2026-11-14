@@ -471,8 +471,6 @@ fn resolve_reveal_targets(cargo_invocation: &CargoInvocation, output_root_dir_pa
             //       `cargo::compiler::CompileMode::Check { test: true }`.
             //       The value of the test field is lost in the unit graph serialization.
             UnitMode::Check => 'arm: {
-                // NOTE: When both variants are present, only the test variant is a root unit,
-                //       and the non-test variant is a dependency-only unit.
                 let Some((twin_in_check_pair_unit_idx, _)) = unit_graph.units.iter().enumerate().find(|&(i, unit)| {
                     i != root_unit_idx
                         && unit.pkg_id == root_unit.pkg_id
@@ -480,8 +478,24 @@ fn resolve_reveal_targets(cargo_invocation: &CargoInvocation, output_root_dir_pa
                         && unit.mode == root_unit.mode
                         && unit.platform == root_unit.platform
                         && unit.features == root_unit.features
-                }) else { break 'arm false; };
-                unit_graph.roots.contains(&twin_in_check_pair_unit_idx)
+                }) else {
+                    // NOTE: A default check invocation (non-tests only) and one targeting tests only
+                    //       produce identical unit graphs for non-integration-test targets except for potential dependency differences.
+                    //       To differentiate between the two cases, both producing a single root unit for the target,
+                    //       we need to inspect the overall invocation.
+                    // HACK: If there is only one instance of check, then we see whether the invocation is targeting tests,
+                    //       which has to be explicitly specified in the case of check.
+                    //       `--test <TARGET_NAME>` is not a concern here, as it can only be used to select integration tests.
+                    //       `--all-targets` is not a concern here, as that would select both the regular and test variants.
+                    //       This also extends to other combinations of targeting flags.
+                    //       Thus, only `--tests` needs to be checked, which also targets unit tests.
+                    //       With it, a non-paired check root unit always corresponds to the test variant.
+                    break 'arm cargo_invocation.cargo_args.contains(&"--tests");
+                };
+                // NOTE: Both variants may be a root unit at the same time, but
+                //       Cargo always emits the regular check first and then the test check variant of the same target.
+                //       Thus, the latter one of a check pair is the test invocation.
+                root_unit_idx > twin_in_check_pair_unit_idx
             }
             UnitMode::Doc | UnitMode::Doctest | UnitMode::Docscrape | UnitMode::RunCustomBuild => unreachable!(),
         };
